@@ -355,7 +355,6 @@ def evaluate_hpylm_sweep(
                 model = pickle.load(fp)
             if not isinstance(model, HPYLM):
                 raise TypeError(f"Invalid HPYLM checkpoint at {checkpoint_file}")
-            warm_start = True
             print(f"[Eval][HPYLM] resumed from checkpoint: {checkpoint_file}")
         else:
             model = HPYLM(
@@ -364,15 +363,12 @@ def evaluate_hpylm_sweep(
                 discount=discount,
                 concentration=concentration,
             )
-            warm_start = False
-
-        model.fit(
-            trained_corpus,
-            num_gibbs_iterations=50,
-            verbose=True,
-            save_dir=hpylm_save_dir,
-            warm_start=warm_start,
-        )
+            model.fit(
+                trained_corpus,
+                num_gibbs_iterations=50,
+                verbose=True,
+                save_dir=hpylm_save_dir,
+            )
         perplexity = calculate_hpylm_perplexity(model, test_tokens)
         recall3, recall5 = calculate_hpylm_topk_accuracy(model, test_tokens, id_to_word)
         latency = measure_latency_ms(

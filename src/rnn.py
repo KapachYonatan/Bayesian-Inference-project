@@ -192,7 +192,8 @@ class NeuralAutocompleter:
                 f"early_stopping_patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
             )
 
-        for local_epoch in range(epochs):
+        remaining_epochs = max(0, epochs - start_epoch)
+        for local_epoch in range(remaining_epochs):
             current_epoch = start_epoch + local_epoch + 1
             running_loss = 0.0
             num_batches = 0

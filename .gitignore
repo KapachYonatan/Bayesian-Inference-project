@@ -13,6 +13,7 @@ data/
 models/
 
 # Optional generated outputs
+results/
 results/*.csv
 results/*.tsv
 results/*.json
