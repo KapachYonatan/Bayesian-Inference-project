@@ -369,7 +369,7 @@ def evaluate_hpylm_sweep(
         model.fit(
             trained_corpus,
             num_gibbs_iterations=50,
-            verbose=args.quick_sweep,
+            verbose=True,
             save_dir=hpylm_save_dir,
             warm_start=warm_start,
         )
@@ -446,7 +446,7 @@ def evaluate_rnn_sweep(
             dataloader=bundle.train_loader,
             epochs=max(1, args.rnn_epochs if not args.quick_sweep else 1),
             lr=1e-3,
-            verbose=args.quick_sweep,
+            verbose=True,
             save_dir=rnn_save_dir,
             resume_checkpoint=resume_checkpoint,
             valid_dataloader=bundle.valid_loader,

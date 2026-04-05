@@ -54,6 +54,11 @@ class Restaurant:
 
     def add_customer(self, dish: int, discount: float, concentration: float) -> bool:
         """Seat a customer under CRP seating dynamics. Return True if a new table is created."""
+        if self.parent is None:
+            parent_prob = 1.0 / float(max(self.base_vocab_size, 1))
+        else:
+            parent_prob = self.parent.predictive_prob(dish, discount, concentration)
+
         candidates: List[Tuple[float, Optional[Table]]] = []
         total_mass = 0.0
 
@@ -63,7 +68,7 @@ class Restaurant:
                 candidates.append((mass, table))
                 total_mass += mass
 
-        new_table_mass = concentration + discount * self.total_tables
+        new_table_mass = (concentration + discount * self.total_tables) * parent_prob
         candidates.append((new_table_mass, None))
         total_mass += new_table_mass
 
@@ -98,7 +103,9 @@ class Restaurant:
         if not matching_tables:
             return False
 
-        total_dish_customers = sum(table.customers for table in matching_tables)
+        total_dish_customers = self.dish_customer_counts.get(dish, 0)
+        if total_dish_customers <= 0:
+            return False
         draw = random.randint(1, total_dish_customers)
         accum = 0
         chosen: Optional[Table] = None
@@ -217,8 +224,8 @@ class HPYLM:
             for dish in support:
                 n_w = node.dish_customer_counts.get(dish, 0)
                 t_w = node.dish_table_counts.get(dish, 0)
-                observed_mass = max(n_w - self.discount * t_w, 0.0)
-                next_probs[dish] = (observed_mass + backoff_coeff * probs[dish])
+                observed_mass = max(n_w - self.discount * t_w, 0.0) / denom
+                next_probs[dish] = observed_mass + backoff_coeff * probs[dish]
 
             probs = next_probs
             unseen_prob = backoff_coeff * unseen_prob
