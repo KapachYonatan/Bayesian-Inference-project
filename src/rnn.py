@@ -24,6 +24,7 @@ class NextWordRNN(nn.Module):
         hidden_dim: int = 256,
         num_layers: int = 1,
         cell_type: str = "lstm",
+        dropout_prob: float = 0.5,
     ) -> None:
         super().__init__()
         self.vocab_size = vocab_size
@@ -31,14 +32,17 @@ class NextWordRNN(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.cell_type = cell_type.lower()
+        self.dropout_prob = dropout_prob
 
         self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.dropout = nn.Dropout(p=dropout_prob)
 
         if self.cell_type == "rnn":
             self.recurrent = nn.RNN(
                 input_size=embed_dim,
                 hidden_size=hidden_dim,
                 num_layers=num_layers,
+                dropout=dropout_prob if num_layers > 1 else 0.0,
                 batch_first=True,
             )
         elif self.cell_type == "gru":
@@ -46,6 +50,7 @@ class NextWordRNN(nn.Module):
                 input_size=embed_dim,
                 hidden_size=hidden_dim,
                 num_layers=num_layers,
+                dropout=dropout_prob if num_layers > 1 else 0.0,
                 batch_first=True,
             )
         elif self.cell_type == "lstm":
@@ -53,6 +58,7 @@ class NextWordRNN(nn.Module):
                 input_size=embed_dim,
                 hidden_size=hidden_dim,
                 num_layers=num_layers,
+                dropout=dropout_prob if num_layers > 1 else 0.0,
                 batch_first=True,
             )
         else:
@@ -66,7 +72,7 @@ class NextWordRNN(nn.Module):
         hidden: Optional[HiddenState] = None,
     ) -> Tuple[torch.Tensor, HiddenState]:
         """Return logits for the next token and recurrent hidden state."""
-        embedded = self.embedding(x)
+        embedded = self.dropout(self.embedding(x))
         out, next_hidden = self.recurrent(embedded, hidden)
         final_timestep = out[:, -1, :]
         logits = self.output(final_timestep)
@@ -112,10 +118,17 @@ class NeuralAutocompleter:
     ) -> List[float]:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-5)
 
         if early_stopping_patience > 0 and valid_dataloader is None:
             raise ValueError("valid_dataloader is required when early_stopping_patience > 0")
+
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=0.1,
+            patience=2,
+        )
 
         start_epoch = 0
         best_val_loss = float("inf")
@@ -276,6 +289,16 @@ class NeuralAutocompleter:
                         f"[RNN] epoch {current_epoch} average train loss: {avg_loss:.4f}, "
                         f"val loss: {val_loss:.4f}, improved={improved}, "
                         f"no_improve_epochs={no_improve_epochs}"
+                    )
+
+            if val_loss is not None:
+                previous_lr = float(optimizer.param_groups[0]["lr"])
+                scheduler.step(val_loss)
+                current_lr = float(optimizer.param_groups[0]["lr"])
+                if verbose and current_lr != previous_lr:
+                    print(
+                        f"[RNN] lr reduced at epoch {current_epoch}: "
+                        f"{previous_lr:.2e} -> {current_lr:.2e}"
                     )
 
             if early_stopping_patience > 0 and no_improve_epochs >= early_stopping_patience:
