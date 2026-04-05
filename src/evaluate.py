@@ -27,12 +27,12 @@ from src.hpylm import HPYLM
 from src.rnn import NeuralAutocompleter, NextWordRNN
 
 
-HPYLM_ORDER_GRID = [2, 3, 5]
-HPYLM_DISCOUNT_GRID = [0.5, 0.75, 0.9]
-HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
+HPYLM_ORDER_GRID = [2, 3, 4]
+HPYLM_DISCOUNT_GRID = [0.5, 0.75]
+HPYLM_CONCENTRATION_GRID = [0.1, 1.0, 5.0]
 RNN_CELL_TYPE_GRID = ["lstm", "gru"]
-RNN_HIDDEN_DIM_GRID = [128, 256, 512]
-RNN_EMBED_DIM_GRID = [128, 300]
+RNN_HIDDEN_DIM_GRID = [64, 128]
+RNN_EMBED_DIM_GRID = [64, 128]
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +66,23 @@ def parse_args() -> argparse.Namespace:
         "--resume-training",
         action="store_true",
         help="Resume from latest checkpoints in --save-dir when available.",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=0,
+        help="RNN early stopping patience in epochs (0 disables early stopping).",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=0.0,
+        help="Minimum validation-loss improvement to reset early stopping patience.",
+    )
+    parser.add_argument(
+        "--no-restore-best",
+        action="store_true",
+        help="Do not restore best validation-loss weights at the end of RNN training.",
     )
     return parser.parse_args()
 
@@ -422,6 +439,10 @@ def evaluate_rnn_sweep(
             verbose=args.quick_sweep,
             save_dir=rnn_save_dir,
             resume_checkpoint=resume_checkpoint,
+            valid_dataloader=bundle.valid_loader,
+            early_stopping_patience=args.early_stopping_patience,
+            early_stopping_min_delta=args.early_stopping_min_delta,
+            restore_best_weights=not args.no_restore_best,
         )
         perplexity = calculate_rnn_perplexity(completer, bundle.test_loader)
         top1_acc, top3_acc = calculate_rnn_topk_accuracy(completer, bundle.test_loader)

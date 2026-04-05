@@ -62,12 +62,21 @@ def test_rnn_save_and_resume() -> None:
         # First run: should save checkpoints and vocab metadata.
         model_1 = NextWordRNN(vocab_size=len(word_to_id), embed_dim=16, hidden_dim=32, cell_type="gru")
         trainer_1 = NeuralAutocompleter(model_1, word_to_id, id_to_word, device="cpu", seq_len=3)
-        losses_1 = trainer_1.fit(dataloader=dataloader, epochs=1, lr=0.01, save_dir=str(save_dir))
+        losses_1 = trainer_1.fit(
+            dataloader=dataloader,
+            epochs=4,
+            lr=0.01,
+            save_dir=str(save_dir),
+            valid_dataloader=dataloader,
+            early_stopping_patience=1,
+            early_stopping_min_delta=0.0,
+        )
 
-        assert len(losses_1) == 1, f"Expected one epoch loss, got {len(losses_1)}"
+        assert 1 <= len(losses_1) <= 4, f"Unexpected epoch-loss count with early stopping: {len(losses_1)}"
         assert (save_dir / "vocab.json").exists(), "Expected vocab.json to be saved"
-        assert (save_dir / "rnn_epoch_1.pth").exists(), "Expected per-epoch checkpoint"
+        assert any(save_dir.glob("rnn_epoch_*.pth")), "Expected at least one per-epoch checkpoint"
         assert (save_dir / "rnn_latest.pt").exists(), "Expected latest checkpoint"
+        assert (save_dir / "rnn_best.pt").exists(), "Expected best-checkpoint file for early stopping"
 
         # Resume path: load latest checkpoint into a fresh model via fit(..., resume_checkpoint=...).
         checkpoint = torch.load(save_dir / "rnn_latest.pt", map_location="cpu")
@@ -81,6 +90,8 @@ def test_rnn_save_and_resume() -> None:
             lr=0.01,
             save_dir=str(save_dir),
             resume_checkpoint=str(save_dir / "rnn_latest.pt"),
+            valid_dataloader=dataloader,
+            early_stopping_patience=1,
         )
         assert losses_2 == [], f"Expected no losses for 0 epochs, got {losses_2}"
 

@@ -105,10 +105,23 @@ class NeuralAutocompleter:
         verbose: bool = False,
         save_dir: Optional[str] = None,
         resume_checkpoint: Optional[str] = None,
+        valid_dataloader: Optional[torch.utils.data.DataLoader] = None,
+        early_stopping_patience: int = 0,
+        early_stopping_min_delta: float = 0.0,
+        restore_best_weights: bool = True,
     ) -> List[float]:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+
+        if early_stopping_patience > 0 and valid_dataloader is None:
+            raise ValueError("valid_dataloader is required when early_stopping_patience > 0")
+
+        start_epoch = 0
+        best_val_loss = float("inf")
+        best_epoch = 0
+        no_improve_epochs = 0
+        best_model_state_dict: Optional[Dict[str, torch.Tensor]] = None
 
         if resume_checkpoint is not None:
             checkpoint = torch.load(resume_checkpoint, map_location=self.device)
@@ -116,11 +129,38 @@ class NeuralAutocompleter:
                 self.model.load_state_dict(checkpoint["model_state_dict"])
                 if "optimizer_state_dict" in checkpoint:
                     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                start_epoch = int(checkpoint.get("epoch", 0))
+                best_val_loss = float(checkpoint.get("best_val_loss", best_val_loss))
+                best_epoch = int(checkpoint.get("best_epoch", best_epoch))
+                no_improve_epochs = int(checkpoint.get("no_improve_epochs", no_improve_epochs))
+                saved_best_state = checkpoint.get("best_model_state_dict")
+                if isinstance(saved_best_state, dict):
+                    best_model_state_dict = saved_best_state
             else:
                 # Backward compatibility for checkpoints saved as raw state_dict.
                 self.model.load_state_dict(checkpoint)
             if verbose:
                 print(f"[RNN] resumed from checkpoint: {resume_checkpoint}")
+
+        def _evaluate_validation_loss() -> float:
+            if valid_dataloader is None:
+                return float("inf")
+
+            self.model.eval()
+            total_loss = 0.0
+            total_items = 0
+            with torch.no_grad():
+                for inputs, targets in valid_dataloader:
+                    inputs = inputs.to(self.device)
+                    targets = targets.to(self.device)
+                    logits, _ = self.model(inputs)
+                    loss = criterion(logits, targets)
+                    total_loss += float(loss.item()) * int(targets.numel())
+                    total_items += int(targets.numel())
+            self.model.train()
+            if total_items == 0:
+                return float("inf")
+            return total_loss / total_items
 
         save_path: Optional[Path] = None
         if save_dir is not None:
@@ -148,15 +188,17 @@ class NeuralAutocompleter:
         if verbose:
             print(
                 f"[RNN] fitting cell_type={self.model.cell_type}, embed_dim={self.model.embed_dim}, "
-                f"hidden_dim={self.model.hidden_dim}, layers={self.model.num_layers}, epochs={epochs}, lr={lr}"
+                f"hidden_dim={self.model.hidden_dim}, layers={self.model.num_layers}, epochs={epochs}, lr={lr}, "
+                f"early_stopping_patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
             )
 
-        for epoch in range(epochs):
+        for local_epoch in range(epochs):
+            current_epoch = start_epoch + local_epoch + 1
             running_loss = 0.0
             num_batches = 0
 
             if verbose:
-                print(f"[RNN] epoch {epoch + 1}/{epochs} started")
+                print(f"[RNN] epoch {current_epoch} started")
 
             for batch_index, (inputs, targets) in enumerate(dataloader, start=1):
                 inputs = inputs.to(self.device)
@@ -173,20 +215,52 @@ class NeuralAutocompleter:
                 num_batches += 1
 
                 if verbose and batch_index == 1:
-                    print(f"[RNN] epoch {epoch + 1} first-batch loss: {loss.item():.4f}")
+                    print(f"[RNN] epoch {current_epoch} first-batch loss: {loss.item():.4f}")
 
             avg_loss = running_loss / max(num_batches, 1)
             epoch_losses.append(avg_loss)
 
+            val_loss = _evaluate_validation_loss() if valid_dataloader is not None else None
+            improved = False
+            if val_loss is not None:
+                if val_loss < (best_val_loss - early_stopping_min_delta):
+                    best_val_loss = val_loss
+                    best_epoch = current_epoch
+                    no_improve_epochs = 0
+                    improved = True
+                    best_model_state_dict = {
+                        key: value.detach().cpu().clone()
+                        for key, value in self.model.state_dict().items()
+                    }
+                    if save_path is not None:
+                        best_file = save_path / "rnn_best.pt"
+                        torch.save(
+                            {
+                                "epoch": current_epoch,
+                                "model_state_dict": self.model.state_dict(),
+                                "optimizer_state_dict": optimizer.state_dict(),
+                                "best_val_loss": best_val_loss,
+                            },
+                            best_file,
+                        )
+                        if verbose:
+                            print(f"[RNN] best checkpoint saved: {best_file}")
+                else:
+                    no_improve_epochs += 1
+
             if save_path is not None:
-                checkpoint_file = save_path / f"rnn_epoch_{epoch + 1}.pth"
+                checkpoint_file = save_path / f"rnn_epoch_{current_epoch}.pth"
                 torch.save(self.model.state_dict(), checkpoint_file)
                 latest_file = save_path / "rnn_latest.pt"
                 torch.save(
                     {
-                        "epoch": epoch + 1,
+                        "epoch": current_epoch,
                         "model_state_dict": self.model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
+                        "best_val_loss": best_val_loss,
+                        "best_epoch": best_epoch,
+                        "no_improve_epochs": no_improve_epochs,
+                        "best_model_state_dict": best_model_state_dict,
                     },
                     latest_file,
                 )
@@ -194,7 +268,27 @@ class NeuralAutocompleter:
                     print(f"[RNN] checkpoint saved: {checkpoint_file}")
 
             if verbose:
-                print(f"[RNN] epoch {epoch + 1}/{epochs} average loss: {avg_loss:.4f}")
+                if val_loss is None:
+                    print(f"[RNN] epoch {current_epoch} average train loss: {avg_loss:.4f}")
+                else:
+                    print(
+                        f"[RNN] epoch {current_epoch} average train loss: {avg_loss:.4f}, "
+                        f"val loss: {val_loss:.4f}, improved={improved}, "
+                        f"no_improve_epochs={no_improve_epochs}"
+                    )
+
+            if early_stopping_patience > 0 and no_improve_epochs >= early_stopping_patience:
+                if verbose:
+                    print(
+                        f"[RNN] early stopping triggered at epoch {current_epoch}; "
+                        f"best epoch={best_epoch}, best val loss={best_val_loss:.4f}"
+                    )
+                break
+
+        if restore_best_weights and best_model_state_dict is not None:
+            self.model.load_state_dict(best_model_state_dict)
+            if verbose:
+                print(f"[RNN] restored best model weights from epoch {best_epoch}")
 
         if verbose:
             print("[RNN] training complete")
