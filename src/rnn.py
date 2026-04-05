@@ -202,6 +202,8 @@ class NeuralAutocompleter:
             print(
                 f"[RNN] fitting cell_type={self.model.cell_type}, embed_dim={self.model.embed_dim}, "
                 f"hidden_dim={self.model.hidden_dim}, layers={self.model.num_layers}, epochs={epochs}, lr={lr}, "
+                f"dropout_prob={self.model.dropout_prob}, weight_decay=1e-5, "
+                f"scheduler=ReduceLROnPlateau(factor=0.1, patience=2), "
                 f"early_stopping_patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
             )
 
