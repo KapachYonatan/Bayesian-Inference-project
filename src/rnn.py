@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -80,24 +82,70 @@ class NeuralAutocompleter:
         device: str = "cpu",
         seq_len: Optional[int] = None,
     ):
-        self.model = model.to(device)
+        if device == "auto":
+            resolved_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            requested = torch.device(device)
+            if requested.type == "cuda" and not torch.cuda.is_available():
+                resolved_device = torch.device("cpu")
+            else:
+                resolved_device = requested
+
+        self.model = model.to(resolved_device)
         self.word_to_id = word_to_id
         self.id_to_word = id_to_word
-        self.device = device
+        self.device = resolved_device
         self.seq_len = seq_len
 
-    def fit(self, dataloader: torch.utils.data.DataLoader, epochs: int, lr: float) -> List[float]:
+    def fit(
+        self,
+        dataloader: torch.utils.data.DataLoader,
+        epochs: int,
+        lr: float,
+        verbose: bool = False,
+        save_dir: Optional[str] = None,
+    ) -> List[float]:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
+        save_path: Optional[Path] = None
+        if save_dir is not None:
+            save_path = Path(save_dir)
+            save_path.mkdir(parents=True, exist_ok=True)
+            vocab_payload = {
+                "word_to_id": self.word_to_id,
+                "id_to_word": {str(k): v for k, v in self.id_to_word.items()},
+                "model_config": {
+                    "vocab_size": self.model.vocab_size,
+                    "embed_dim": self.model.embed_dim,
+                    "hidden_dim": self.model.hidden_dim,
+                    "num_layers": self.model.num_layers,
+                    "cell_type": self.model.cell_type,
+                    "seq_len": self.seq_len,
+                },
+            }
+            with (save_path / "vocab.json").open("w", encoding="utf-8") as fp:
+                json.dump(vocab_payload, fp, indent=2)
+            if verbose:
+                print(f"[RNN] wrote vocab metadata to {save_path / 'vocab.json'}")
+
         epoch_losses: List[float] = []
         self.model.train()
-        for _ in range(epochs):
+        if verbose:
+            print(
+                f"[RNN] fitting cell_type={self.model.cell_type}, embed_dim={self.model.embed_dim}, "
+                f"hidden_dim={self.model.hidden_dim}, layers={self.model.num_layers}, epochs={epochs}, lr={lr}"
+            )
+
+        for epoch in range(epochs):
             running_loss = 0.0
             num_batches = 0
 
-            for inputs, targets in dataloader:
+            if verbose:
+                print(f"[RNN] epoch {epoch + 1}/{epochs} started")
+
+            for batch_index, (inputs, targets) in enumerate(dataloader, start=1):
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
 
@@ -111,8 +159,23 @@ class NeuralAutocompleter:
                 running_loss += float(loss.item())
                 num_batches += 1
 
+                if verbose and batch_index == 1:
+                    print(f"[RNN] epoch {epoch + 1} first-batch loss: {loss.item():.4f}")
+
             avg_loss = running_loss / max(num_batches, 1)
             epoch_losses.append(avg_loss)
+
+            if save_path is not None:
+                checkpoint_file = save_path / f"rnn_epoch_{epoch + 1}.pth"
+                torch.save(self.model.state_dict(), checkpoint_file)
+                if verbose:
+                    print(f"[RNN] checkpoint saved: {checkpoint_file}")
+
+            if verbose:
+                print(f"[RNN] epoch {epoch + 1}/{epochs} average loss: {avg_loss:.4f}")
+
+        if verbose:
+            print("[RNN] training complete")
 
         return epoch_losses
 
