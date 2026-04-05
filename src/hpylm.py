@@ -240,6 +240,25 @@ class HPYLM:
                 break
         return candidates
 
+    def _sequence_perplexity(self, tokenized_corpus: List[int]) -> float:
+        if len(tokenized_corpus) < 2:
+            return float("inf")
+
+        import math
+
+        log_prob_sum = 0.0
+        token_count = 0
+        for index in range(1, len(tokenized_corpus)):
+            context_start = max(0, index - (self.order - 1))
+            context = tuple(tokenized_corpus[context_start:index])
+            dish = tokenized_corpus[index]
+            restaurant = self._find_existing_restaurant(context)
+            prob = restaurant.predictive_prob(dish, self.discount, self.concentration)
+            log_prob_sum += math.log(max(prob, 1e-12))
+            token_count += 1
+
+        return math.exp(-log_prob_sum / max(token_count, 1))
+
     def fit(
         self,
         tokenized_corpus: List[int],
@@ -247,14 +266,25 @@ class HPYLM:
         verbose: bool = False,
         save_dir: Optional[str] = None,
         warm_start: bool = False,
+        valid_tokenized_corpus: Optional[List[int]] = None,
+        early_stopping_patience: int = 0,
+        early_stopping_min_delta: float = 0.0,
+        eval_interval: int = 1,
+        restore_best_state: bool = True,
     ) -> None:
+        if early_stopping_patience > 0 and not valid_tokenized_corpus:
+            raise ValueError("valid_tokenized_corpus is required when early_stopping_patience > 0")
+        if eval_interval < 1:
+            raise ValueError("eval_interval must be >= 1")
+
         # Initialize seating arrangement.
         if verbose:
             print(
                 f"[HPYLM] fitting order={self.order}, vocab_size={self.vocab_size}, "
                 f"discount={self.discount}, concentration={self.concentration}, "
                 f"tokens={len(tokenized_corpus)}, gibbs_iterations={num_gibbs_iterations}, "
-                f"warm_start={warm_start}"
+                f"warm_start={warm_start}, early_stopping_patience={early_stopping_patience}, "
+                f"min_delta={early_stopping_min_delta}, eval_interval={eval_interval}"
             )
         if not warm_start:
             for idx, dish in enumerate(tokenized_corpus):
@@ -273,6 +303,11 @@ class HPYLM:
             save_path.mkdir(parents=True, exist_ok=True)
             checkpoint_file = save_path / "hpylm_checkpoint.pkl"
 
+        best_val_perplexity = float("inf")
+        best_iteration = 0
+        no_improve_iterations = 0
+        best_snapshot: Optional[bytes] = None
+
         # Gibbs resampling over all token positions.
         for iteration in range(num_gibbs_iterations):
             if verbose:
@@ -288,6 +323,45 @@ class HPYLM:
                     pickle.dump(self, fp)
                 if verbose:
                     print(f"[HPYLM] checkpoint saved: {checkpoint_file}")
+
+            should_eval = valid_tokenized_corpus is not None and ((iteration + 1) % eval_interval == 0)
+            if should_eval:
+                val_perplexity = self._sequence_perplexity(valid_tokenized_corpus)
+                improved = val_perplexity < (best_val_perplexity - early_stopping_min_delta)
+                if improved:
+                    best_val_perplexity = val_perplexity
+                    best_iteration = iteration + 1
+                    no_improve_iterations = 0
+                    if restore_best_state:
+                        best_snapshot = pickle.dumps(self)
+                else:
+                    no_improve_iterations += 1
+
+                if verbose:
+                    print(
+                        f"[HPYLM] validation perplexity at iter {iteration + 1}: {val_perplexity:.4f}, "
+                        f"improved={improved}, no_improve={no_improve_iterations}"
+                    )
+
+                if early_stopping_patience > 0 and no_improve_iterations >= early_stopping_patience:
+                    if verbose:
+                        print(
+                            f"[HPYLM] early stopping triggered at iteration {iteration + 1}; "
+                            f"best iteration={best_iteration}, best val perplexity={best_val_perplexity:.4f}"
+                        )
+                    break
+
+        if restore_best_state and best_snapshot is not None:
+            best_model: "HPYLM" = pickle.loads(best_snapshot)
+            self.__dict__ = best_model.__dict__
+            if verbose:
+                print(f"[HPYLM] restored best state from iteration {best_iteration}")
+
+        if checkpoint_file is not None:
+            with checkpoint_file.open("wb") as fp:
+                pickle.dump(self, fp)
+            if verbose:
+                print(f"[HPYLM] final checkpoint saved: {checkpoint_file}")
 
         if verbose:
             print("[HPYLM] training complete")
