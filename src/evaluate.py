@@ -176,12 +176,12 @@ def calculate_hpylm_topk_accuracy(
     token_ids: Sequence[int],
     id_to_word: Dict[int, str],
 ) -> Tuple[float, float]:
-    """Return Top-1 and Top-3 next-token accuracy for HPYLM."""
+    """Return Recall@3 and Recall@5 for HPYLM next-token prediction."""
     if len(token_ids) < 2:
         return 0.0, 0.0
 
-    top1_hits = 0
-    top3_hits = 0
+    recall3_hits = 0
+    recall5_hits = 0
     total = 0
     for index in range(1, len(token_ids)):
         context_start = max(0, index - (model.order - 1))
@@ -193,21 +193,22 @@ def calculate_hpylm_topk_accuracy(
         scored = [(prob, token_id) for token_id, prob in probs.items()]
         scored.extend(
             (unseen_prob, token_id)
-            for token_id in model._candidate_unseen_ids(support, id_to_word, 3)
+            for token_id in model._candidate_unseen_ids(support, id_to_word, 5)
         )
         scored.sort(key=lambda x: x[0], reverse=True)
-        top_ids = [token_id for _, token_id in scored[:3]]
+        top3_ids = [token_id for _, token_id in scored[:3]]
+        top5_ids = [token_id for _, token_id in scored[:5]]
 
         target = token_ids[index]
-        if top_ids and target == top_ids[0]:
-            top1_hits += 1
-        if target in top_ids:
-            top3_hits += 1
+        if target in top3_ids:
+            recall3_hits += 1
+        if target in top5_ids:
+            recall5_hits += 1
         total += 1
 
     if total == 0:
         return 0.0, 0.0
-    return top1_hits / total, top3_hits / total
+    return recall3_hits / total, recall5_hits / total
 
 
 def calculate_rnn_perplexity(completer: NeuralAutocompleter, dataloader) -> float:
@@ -234,11 +235,11 @@ def calculate_rnn_perplexity(completer: NeuralAutocompleter, dataloader) -> floa
 
 
 def calculate_rnn_topk_accuracy(completer: NeuralAutocompleter, dataloader) -> Tuple[float, float]:
-    """Return Top-1 and Top-3 next-token accuracy for RNN."""
+    """Return Recall@3 and Recall@5 for RNN next-token prediction."""
     import torch
 
-    top1_hits = 0
-    top3_hits = 0
+    recall3_hits = 0
+    recall5_hits = 0
     total = 0
 
     completer.model.eval()
@@ -247,16 +248,16 @@ def calculate_rnn_topk_accuracy(completer: NeuralAutocompleter, dataloader) -> T
             inputs = inputs.to(completer.device)
             targets = targets.to(completer.device)
             logits, _ = completer.model(inputs)
-            top1 = torch.argmax(logits, dim=-1)
             top3 = torch.topk(logits, k=min(3, logits.size(-1)), dim=-1).indices
+            top5 = torch.topk(logits, k=min(5, logits.size(-1)), dim=-1).indices
 
-            top1_hits += int((top1 == targets).sum().item())
-            top3_hits += int((top3 == targets.unsqueeze(1)).any(dim=1).sum().item())
+            recall3_hits += int((top3 == targets.unsqueeze(1)).any(dim=1).sum().item())
+            recall5_hits += int((top5 == targets.unsqueeze(1)).any(dim=1).sum().item())
             total += int(targets.numel())
 
     if total == 0:
         return 0.0, 0.0
-    return top1_hits / total, top3_hits / total
+    return recall3_hits / total, recall5_hits / total
 
 
 def measure_latency_ms(predict_fn, contexts: Iterable[Sequence[str]], device=None) -> float:
@@ -289,7 +290,7 @@ def random_contexts_from_tokens(tokens: Sequence[str], context_len: int, sample_
 
 
 def format_markdown_table(rows: List[Dict[str, str]]) -> str:
-    headers = ["Model", "Parameters", "Perplexity", "Top-1 Accuracy", "Top-3 Accuracy", "Latency (ms)"]
+    headers = ["Model", "Parameters", "Perplexity", "Recall@3", "Recall@5", "Latency (ms)"]
     widths = {header: len(header) for header in headers}
     for row in rows:
         for header in headers:
@@ -364,7 +365,7 @@ def evaluate_hpylm_sweep(
             warm_start=warm_start,
         )
         perplexity = calculate_hpylm_perplexity(model, test_tokens)
-        top1_acc, top3_acc = calculate_hpylm_topk_accuracy(model, test_tokens, id_to_word)
+        recall3, recall5 = calculate_hpylm_topk_accuracy(model, test_tokens, id_to_word)
         latency = measure_latency_ms(
             lambda context: model.predict_next_word(context, word_to_id, id_to_word, top_k=3),
             contexts,
@@ -376,15 +377,15 @@ def evaluate_hpylm_sweep(
                 "Model": "HPYLM",
                 "Parameters": params,
                 "Perplexity": f"{perplexity:.4f}",
-                "Top-1 Accuracy": f"{top1_acc:.4f}",
-                "Top-3 Accuracy": f"{top3_acc:.4f}",
+                "Recall@3": f"{recall3:.4f}",
+                "Recall@5": f"{recall5:.4f}",
                 "Latency (ms)": f"{latency:.4f}",
             }
         )
         print(
             f"[Eval][HPYLM] finished config order={order}, discount={discount}, "
             f"concentration={concentration} -> perplexity={perplexity:.4f}, "
-            f"top1={top1_acc:.4f}, top3={top3_acc:.4f}, latency={latency:.4f} ms"
+            f"recall@3={recall3:.4f}, recall@5={recall5:.4f}, latency={latency:.4f} ms"
         )
     print("[Eval][HPYLM] sweep complete")
     return rows
@@ -445,7 +446,7 @@ def evaluate_rnn_sweep(
             restore_best_weights=not args.no_restore_best,
         )
         perplexity = calculate_rnn_perplexity(completer, bundle.test_loader)
-        top1_acc, top3_acc = calculate_rnn_topk_accuracy(completer, bundle.test_loader)
+        recall3, recall5 = calculate_rnn_topk_accuracy(completer, bundle.test_loader)
 
         test_contexts = random_contexts_from_tokens(
             test_words,
@@ -465,15 +466,15 @@ def evaluate_rnn_sweep(
                 "Model": "RNN",
                 "Parameters": params,
                 "Perplexity": f"{perplexity:.4f}",
-                "Top-1 Accuracy": f"{top1_acc:.4f}",
-                "Top-3 Accuracy": f"{top3_acc:.4f}",
+                "Recall@3": f"{recall3:.4f}",
+                "Recall@5": f"{recall5:.4f}",
                 "Latency (ms)": f"{latency:.4f}",
             }
         )
         print(
             f"[Eval][RNN] finished config cell_type={cell_type}, hidden_dim={hidden_dim}, "
-            f"embed_dim={embed_dim} -> perplexity={perplexity:.4f}, top1={top1_acc:.4f}, "
-            f"top3={top3_acc:.4f}, latency={latency:.4f} ms"
+            f"embed_dim={embed_dim} -> perplexity={perplexity:.4f}, recall@3={recall3:.4f}, "
+            f"recall@5={recall5:.4f}, latency={latency:.4f} ms"
         )
         del model
         del completer
