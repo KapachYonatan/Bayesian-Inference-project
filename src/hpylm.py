@@ -246,21 +246,32 @@ class HPYLM:
         num_gibbs_iterations: int = 30,
         verbose: bool = False,
         save_dir: Optional[str] = None,
+        warm_start: bool = False,
     ) -> None:
         # Initialize seating arrangement.
         if verbose:
             print(
                 f"[HPYLM] fitting order={self.order}, vocab_size={self.vocab_size}, "
                 f"discount={self.discount}, concentration={self.concentration}, "
-                f"tokens={len(tokenized_corpus)}, gibbs_iterations={num_gibbs_iterations}"
+                f"tokens={len(tokenized_corpus)}, gibbs_iterations={num_gibbs_iterations}, "
+                f"warm_start={warm_start}"
             )
-        for idx, dish in enumerate(tokenized_corpus):
-            context = self._context_for_index(tokenized_corpus, idx)
-            restaurant = self._get_or_create_restaurant(context)
-            restaurant.add_customer(dish, self.discount, self.concentration)
+        if not warm_start:
+            for idx, dish in enumerate(tokenized_corpus):
+                context = self._context_for_index(tokenized_corpus, idx)
+                restaurant = self._get_or_create_restaurant(context)
+                restaurant.add_customer(dish, self.discount, self.concentration)
+        elif verbose:
+            print("[HPYLM] warm-start enabled: skipping seating initialization")
 
         if verbose:
             print(f"[HPYLM] initialization complete with {len(self.context_trie)} restaurants")
+
+        checkpoint_file: Optional[Path] = None
+        if save_dir is not None:
+            save_path = Path(save_dir)
+            save_path.mkdir(parents=True, exist_ok=True)
+            checkpoint_file = save_path / "hpylm_checkpoint.pkl"
 
         # Gibbs resampling over all token positions.
         for iteration in range(num_gibbs_iterations):
@@ -272,14 +283,11 @@ class HPYLM:
                 restaurant.remove_customer(dish)
                 restaurant.add_customer(dish, self.discount, self.concentration)
 
-        if save_dir is not None:
-            save_path = Path(save_dir)
-            save_path.mkdir(parents=True, exist_ok=True)
-            checkpoint_file = save_path / "hpylm_checkpoint.pkl"
-            with checkpoint_file.open("wb") as fp:
-                pickle.dump(self, fp)
-            if verbose:
-                print(f"[HPYLM] checkpoint saved: {checkpoint_file}")
+            if checkpoint_file is not None:
+                with checkpoint_file.open("wb") as fp:
+                    pickle.dump(self, fp)
+                if verbose:
+                    print(f"[HPYLM] checkpoint saved: {checkpoint_file}")
 
         if verbose:
             print("[HPYLM] training complete")

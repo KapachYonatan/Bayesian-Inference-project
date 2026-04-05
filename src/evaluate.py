@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import math
+import pickle
 import random
 import statistics
 import sys
@@ -55,6 +56,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run a reduced hyperparameter sweep for faster smoke testing.",
     )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default=None,
+        help="Optional root directory for saving model checkpoints during sweeps.",
+    )
+    parser.add_argument(
+        "--resume-training",
+        action="store_true",
+        help="Resume from latest checkpoints in --save-dir when available.",
+    )
     return parser.parse_args()
 
 
@@ -69,6 +81,35 @@ def resolve_device(device_arg: str):
         print("[Eval] CUDA requested but unavailable; falling back to CPU")
         return torch.device("cpu")
     return requested
+
+
+def config_save_dir(base_dir: str | None, model_name: str, params: Dict[str, object]) -> str | None:
+    if base_dir is None:
+        return None
+
+    root = Path(base_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    suffix = "_".join(f"{key}-{value}" for key, value in params.items())
+    run_dir = root / model_name / suffix
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return str(run_dir)
+
+
+def latest_rnn_checkpoint(run_dir: str | None) -> str | None:
+    if run_dir is None:
+        return None
+    path = Path(run_dir)
+    if not path.exists():
+        return None
+
+    latest_file = path / "rnn_latest.pt"
+    if latest_file.exists():
+        return str(latest_file)
+
+    epoch_files = sorted(path.glob("rnn_epoch_*.pth"), key=lambda p: int(p.stem.split("_")[-1]))
+    if not epoch_files:
+        return None
+    return str(epoch_files[-1])
 
 
 def selected_hpylm_grid(args: argparse.Namespace) -> Tuple[List[int], List[float], List[float]]:
@@ -273,16 +314,37 @@ def evaluate_hpylm_sweep(
             f"[Eval][HPYLM] training config order={order}, discount={discount}, "
             f"concentration={concentration}"
         )
-        model = HPYLM(
-            order=order,
-            vocab_size=args.vocab_size,
-            discount=discount,
-            concentration=concentration,
+        hpylm_save_dir = config_save_dir(
+            args.save_dir,
+            "hpylm",
+            {"order": order, "discount": discount, "concentration": concentration},
         )
+        if hpylm_save_dir is not None:
+            print(f"[Eval][HPYLM] checkpoints -> {hpylm_save_dir}")
+
+        checkpoint_file = Path(hpylm_save_dir) / "hpylm_checkpoint.pkl" if hpylm_save_dir is not None else None
+        if args.resume_training and checkpoint_file is not None and checkpoint_file.exists():
+            with checkpoint_file.open("rb") as fp:
+                model = pickle.load(fp)
+            if not isinstance(model, HPYLM):
+                raise TypeError(f"Invalid HPYLM checkpoint at {checkpoint_file}")
+            warm_start = True
+            print(f"[Eval][HPYLM] resumed from checkpoint: {checkpoint_file}")
+        else:
+            model = HPYLM(
+                order=order,
+                vocab_size=args.vocab_size,
+                discount=discount,
+                concentration=concentration,
+            )
+            warm_start = False
+
         model.fit(
             trained_corpus,
             num_gibbs_iterations=max(1, args.hpylm_iterations if not args.quick_sweep else 1),
             verbose=args.quick_sweep,
+            save_dir=hpylm_save_dir,
+            warm_start=warm_start,
         )
         perplexity = calculate_hpylm_perplexity(model, test_tokens)
         top1_acc, top3_acc = calculate_hpylm_topk_accuracy(model, test_tokens, id_to_word)
@@ -341,11 +403,25 @@ def evaluate_rnn_sweep(
             device=str(device),
             seq_len=args.seq_len,
         )
+        rnn_save_dir = config_save_dir(
+            args.save_dir,
+            "rnn",
+            {"cell_type": cell_type, "hidden_dim": hidden_dim, "embed_dim": embed_dim},
+        )
+        if rnn_save_dir is not None:
+            print(f"[Eval][RNN] checkpoints -> {rnn_save_dir}")
+
+        resume_checkpoint = latest_rnn_checkpoint(rnn_save_dir) if args.resume_training else None
+        if resume_checkpoint is not None:
+            print(f"[Eval][RNN] resumed from checkpoint: {resume_checkpoint}")
+
         completer.fit(
             dataloader=bundle.train_loader,
             epochs=max(1, args.rnn_epochs if not args.quick_sweep else 1),
             lr=1e-3,
             verbose=args.quick_sweep,
+            save_dir=rnn_save_dir,
+            resume_checkpoint=resume_checkpoint,
         )
         perplexity = calculate_rnn_perplexity(completer, bundle.test_loader)
         top1_acc, top3_acc = calculate_rnn_topk_accuracy(completer, bundle.test_loader)

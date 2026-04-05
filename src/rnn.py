@@ -104,10 +104,23 @@ class NeuralAutocompleter:
         lr: float,
         verbose: bool = False,
         save_dir: Optional[str] = None,
+        resume_checkpoint: Optional[str] = None,
     ) -> List[float]:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+
+        if resume_checkpoint is not None:
+            checkpoint = torch.load(resume_checkpoint, map_location=self.device)
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                self.model.load_state_dict(checkpoint["model_state_dict"])
+                if "optimizer_state_dict" in checkpoint:
+                    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            else:
+                # Backward compatibility for checkpoints saved as raw state_dict.
+                self.model.load_state_dict(checkpoint)
+            if verbose:
+                print(f"[RNN] resumed from checkpoint: {resume_checkpoint}")
 
         save_path: Optional[Path] = None
         if save_dir is not None:
@@ -168,6 +181,15 @@ class NeuralAutocompleter:
             if save_path is not None:
                 checkpoint_file = save_path / f"rnn_epoch_{epoch + 1}.pth"
                 torch.save(self.model.state_dict(), checkpoint_file)
+                latest_file = save_path / "rnn_latest.pt"
+                torch.save(
+                    {
+                        "epoch": epoch + 1,
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                    },
+                    latest_file,
+                )
                 if verbose:
                     print(f"[RNN] checkpoint saved: {checkpoint_file}")
 
