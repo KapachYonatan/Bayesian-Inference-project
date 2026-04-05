@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pickle
 import random
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,7 +22,7 @@ class Restaurant:
     def __init__(self, context: Tuple[int, ...], parent: Optional["Restaurant"] = None):
         self.context: Tuple[int, ...] = context
         self.parent: Optional[Restaurant] = parent
-        self.tables: List[Table] = []
+        self.tables_by_dish: Dict[int, List[Table]] = {}
         self.total_customers: int = 0
         self.total_tables: int = 0
         self.dish_customer_counts: Dict[int, int] = {}
@@ -56,9 +57,7 @@ class Restaurant:
         candidates: List[Tuple[float, Optional[Table]]] = []
         total_mass = 0.0
 
-        for table in self.tables:
-            if table.dish != dish:
-                continue
+        for table in self.tables_by_dish.get(dish, []):
             mass = max(table.customers - discount, 0.0)
             if mass > 0:
                 candidates.append((mass, table))
@@ -85,7 +84,7 @@ class Restaurant:
 
         new_table = Table(dish=dish)
         new_table.customers = 1
-        self.tables.append(new_table)
+        self.tables_by_dish.setdefault(dish, []).append(new_table)
         self.total_tables += 1
         self.dish_customer_counts[dish] = self.dish_customer_counts.get(dish, 0) + 1
         self.dish_table_counts[dish] = self.dish_table_counts.get(dish, 0) + 1
@@ -95,7 +94,7 @@ class Restaurant:
 
     def remove_customer(self, dish: int) -> bool:
         """Remove a customer assignment. Return True if a table is destroyed."""
-        matching_tables = [table for table in self.tables if table.dish == dish and table.customers > 0]
+        matching_tables = [table for table in self.tables_by_dish.get(dish, []) if table.customers > 0]
         if not matching_tables:
             return False
 
@@ -120,7 +119,9 @@ class Restaurant:
         if chosen.customers > 0:
             return False
 
-        self.tables.remove(chosen)
+        self.tables_by_dish[dish].remove(chosen)
+        if not self.tables_by_dish[dish]:
+            del self.tables_by_dish[dish]
         self.total_tables -= 1
         self.dish_table_counts[dish] = self.dish_table_counts.get(dish, 0) - 1
         if self.dish_table_counts[dish] <= 0:
@@ -240,25 +241,6 @@ class HPYLM:
                 break
         return candidates
 
-    def _sequence_perplexity(self, tokenized_corpus: List[int]) -> float:
-        if len(tokenized_corpus) < 2:
-            return float("inf")
-
-        import math
-
-        log_prob_sum = 0.0
-        token_count = 0
-        for index in range(1, len(tokenized_corpus)):
-            context_start = max(0, index - (self.order - 1))
-            context = tuple(tokenized_corpus[context_start:index])
-            dish = tokenized_corpus[index]
-            restaurant = self._find_existing_restaurant(context)
-            prob = restaurant.predictive_prob(dish, self.discount, self.concentration)
-            log_prob_sum += math.log(max(prob, 1e-12))
-            token_count += 1
-
-        return math.exp(-log_prob_sum / max(token_count, 1))
-
     def fit(
         self,
         tokenized_corpus: List[int],
@@ -266,16 +248,25 @@ class HPYLM:
         verbose: bool = False,
         save_dir: Optional[str] = None,
         warm_start: bool = False,
-        valid_tokenized_corpus: Optional[List[int]] = None,
-        early_stopping_patience: int = 0,
-        early_stopping_min_delta: float = 0.0,
-        eval_interval: int = 1,
-        restore_best_state: bool = True,
     ) -> None:
-        if early_stopping_patience > 0 and not valid_tokenized_corpus:
-            raise ValueError("valid_tokenized_corpus is required when early_stopping_patience > 0")
-        if eval_interval < 1:
-            raise ValueError("eval_interval must be >= 1")
+        total_tokens = len(tokenized_corpus)
+        progress_step = max(1, total_tokens // 10)
+        context_size = max(self.order - 1, 0)
+
+        if verbose:
+            print("[HPYLM] precomputing contexts")
+        if context_size == 0:
+            contexts: List[Tuple[int, ...]] = [()] * total_tokens
+        else:
+            contexts = []
+            history: List[int] = []
+            for dish in tokenized_corpus:
+                contexts.append(tuple(history))
+                history.append(dish)
+                if len(history) > context_size:
+                    history.pop(0)
+
+        restaurants: List[Restaurant] = [self.root] * total_tokens
 
         # Initialize seating arrangement.
         if verbose:
@@ -283,16 +274,26 @@ class HPYLM:
                 f"[HPYLM] fitting order={self.order}, vocab_size={self.vocab_size}, "
                 f"discount={self.discount}, concentration={self.concentration}, "
                 f"tokens={len(tokenized_corpus)}, gibbs_iterations={num_gibbs_iterations}, "
-                f"warm_start={warm_start}, early_stopping_patience={early_stopping_patience}, "
-                f"min_delta={early_stopping_min_delta}, eval_interval={eval_interval}"
+                f"warm_start={warm_start}"
             )
+
+        init_start = time.perf_counter()
         if not warm_start:
             for idx, dish in enumerate(tokenized_corpus):
-                context = self._context_for_index(tokenized_corpus, idx)
-                restaurant = self._get_or_create_restaurant(context)
+                restaurant = self._get_or_create_restaurant(contexts[idx])
+                restaurants[idx] = restaurant
                 restaurant.add_customer(dish, self.discount, self.concentration)
-        elif verbose:
-            print("[HPYLM] warm-start enabled: skipping seating initialization")
+                if verbose and (((idx + 1) % progress_step == 0) or (idx + 1 == total_tokens)):
+                    elapsed = time.perf_counter() - init_start
+                    print(
+                        f"[HPYLM] init progress {idx + 1}/{total_tokens} "
+                        f"({100.0 * (idx + 1) / max(total_tokens, 1):.1f}%), elapsed={elapsed:.1f}s"
+                    )
+        else:
+            for idx, context in enumerate(contexts):
+                restaurants[idx] = self._get_or_create_restaurant(context)
+            if verbose:
+                print("[HPYLM] warm-start enabled: skipping seating initialization")
 
         if verbose:
             print(f"[HPYLM] initialization complete with {len(self.context_trie)} restaurants")
@@ -303,59 +304,27 @@ class HPYLM:
             save_path.mkdir(parents=True, exist_ok=True)
             checkpoint_file = save_path / "hpylm_checkpoint.pkl"
 
-        best_val_perplexity = float("inf")
-        best_iteration = 0
-        no_improve_iterations = 0
-        best_snapshot: Optional[bytes] = None
-
         # Gibbs resampling over all token positions.
         for iteration in range(num_gibbs_iterations):
+            iter_start = time.perf_counter()
             if verbose:
                 print(f"[HPYLM] gibbs iteration {iteration + 1}/{num_gibbs_iterations}")
             for idx, dish in enumerate(tokenized_corpus):
-                context = self._context_for_index(tokenized_corpus, idx)
-                restaurant = self._get_or_create_restaurant(context)
+                restaurant = restaurants[idx]
                 restaurant.remove_customer(dish)
                 restaurant.add_customer(dish, self.discount, self.concentration)
+                if verbose and (((idx + 1) % progress_step == 0) or (idx + 1 == total_tokens)):
+                    elapsed = time.perf_counter() - iter_start
+                    print(
+                        f"[HPYLM] iter {iteration + 1} progress {idx + 1}/{total_tokens} "
+                        f"({100.0 * (idx + 1) / max(total_tokens, 1):.1f}%), elapsed={elapsed:.1f}s"
+                    )
 
             if checkpoint_file is not None:
                 with checkpoint_file.open("wb") as fp:
                     pickle.dump(self, fp)
                 if verbose:
                     print(f"[HPYLM] checkpoint saved: {checkpoint_file}")
-
-            should_eval = valid_tokenized_corpus is not None and ((iteration + 1) % eval_interval == 0)
-            if should_eval:
-                val_perplexity = self._sequence_perplexity(valid_tokenized_corpus)
-                improved = val_perplexity < (best_val_perplexity - early_stopping_min_delta)
-                if improved:
-                    best_val_perplexity = val_perplexity
-                    best_iteration = iteration + 1
-                    no_improve_iterations = 0
-                    if restore_best_state:
-                        best_snapshot = pickle.dumps(self)
-                else:
-                    no_improve_iterations += 1
-
-                if verbose:
-                    print(
-                        f"[HPYLM] validation perplexity at iter {iteration + 1}: {val_perplexity:.4f}, "
-                        f"improved={improved}, no_improve={no_improve_iterations}"
-                    )
-
-                if early_stopping_patience > 0 and no_improve_iterations >= early_stopping_patience:
-                    if verbose:
-                        print(
-                            f"[HPYLM] early stopping triggered at iteration {iteration + 1}; "
-                            f"best iteration={best_iteration}, best val perplexity={best_val_perplexity:.4f}"
-                        )
-                    break
-
-        if restore_best_state and best_snapshot is not None:
-            best_model: "HPYLM" = pickle.loads(best_snapshot)
-            self.__dict__ = best_model.__dict__
-            if verbose:
-                print(f"[HPYLM] restored best state from iteration {best_iteration}")
 
         if checkpoint_file is not None:
             with checkpoint_file.open("wb") as fp:

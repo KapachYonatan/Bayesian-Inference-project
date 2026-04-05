@@ -304,8 +304,9 @@ class NeuralAutocompleter:
         context_ids = [self.word_to_id.get(word.lower(), unk_id) for word in context]
         if len(context_ids) > target_len:
             context_ids = context_ids[-target_len:]
-        elif len(context_ids) < target_len:
-            context_ids = [unk_id] * (target_len - len(context_ids)) + context_ids
+
+        if not context_ids:
+            context_ids = [unk_id]
 
         x = torch.tensor([context_ids], dtype=torch.long, device=self.device)
 

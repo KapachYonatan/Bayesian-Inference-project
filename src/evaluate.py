@@ -40,9 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vocab-size", type=int, default=10_000)
     parser.add_argument("--seq-len", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--hpylm-iterations", type=int, default=5)
     parser.add_argument("--rnn-epochs", type=int, default=3)
-    parser.add_argument("--max-train-tokens", type=int, default=10_000)
     parser.add_argument("--latency-samples", type=int, default=100)
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument(
@@ -55,6 +53,17 @@ def parse_args() -> argparse.Namespace:
         "--quick-sweep",
         action="store_true",
         help="Run a reduced hyperparameter sweep for faster smoke testing.",
+    )
+    model_scope = parser.add_mutually_exclusive_group()
+    model_scope.add_argument(
+        "--rnn-only",
+        action="store_true",
+        help="Run only the RNN sweep.",
+    )
+    model_scope.add_argument(
+        "--hpylm-only",
+        action="store_true",
+        help="Run only the HPYLM sweep.",
     )
     parser.add_argument(
         "--save-dir",
@@ -83,29 +92,6 @@ def parse_args() -> argparse.Namespace:
         "--no-restore-best",
         action="store_true",
         help="Do not restore best validation-loss weights at the end of RNN training.",
-    )
-    parser.add_argument(
-        "--hpylm-early-stopping-patience",
-        type=int,
-        default=0,
-        help="HPYLM early stopping patience in evaluation checkpoints (0 disables).",
-    )
-    parser.add_argument(
-        "--hpylm-early-stopping-min-delta",
-        type=float,
-        default=0.0,
-        help="Minimum validation-perplexity improvement for HPYLM early stopping.",
-    )
-    parser.add_argument(
-        "--hpylm-eval-interval",
-        type=int,
-        default=1,
-        help="Evaluate HPYLM validation perplexity every N Gibbs iterations.",
-    )
-    parser.add_argument(
-        "--hpylm-no-restore-best",
-        action="store_true",
-        help="Do not restore best-validation HPYLM state after early stopping.",
     )
     return parser.parse_args()
 
@@ -332,13 +318,12 @@ def format_markdown_table(rows: List[Dict[str, str]]) -> str:
 def evaluate_hpylm_sweep(
     args: argparse.Namespace,
     test_tokens: Sequence[int],
-    valid_tokens: Sequence[int],
     test_words: Sequence[str],
     word_to_id: Dict[str, int],
     id_to_word: Dict[int, str],
 ) -> List[Dict[str, str]]:
     corpus_ids, _, _ = get_hpylm_data(vocab_size=args.vocab_size)
-    trained_corpus = corpus_ids[: min(len(corpus_ids), args.max_train_tokens)]
+    trained_corpus = corpus_ids
     order_grid, discount_grid, concentration_grid = selected_hpylm_grid(args)
     contexts = random_contexts_from_tokens(
         test_words,
@@ -383,15 +368,10 @@ def evaluate_hpylm_sweep(
 
         model.fit(
             trained_corpus,
-            num_gibbs_iterations=max(1, args.hpylm_iterations if not args.quick_sweep else 1),
+            num_gibbs_iterations=50,
             verbose=args.quick_sweep,
             save_dir=hpylm_save_dir,
             warm_start=warm_start,
-            valid_tokenized_corpus=list(valid_tokens),
-            early_stopping_patience=args.hpylm_early_stopping_patience,
-            early_stopping_min_delta=args.hpylm_early_stopping_min_delta,
-            eval_interval=args.hpylm_eval_interval,
-            restore_best_state=not args.hpylm_no_restore_best,
         )
         perplexity = calculate_hpylm_perplexity(model, test_tokens)
         recall3, recall5 = calculate_hpylm_topk_accuracy(model, test_tokens, id_to_word)
@@ -519,22 +499,28 @@ def main() -> None:
     device = resolve_device(args.device)
     print(f"[Eval] using device: {device}")
 
-    # Load data once for test-set token sequences and contexts.
-    train_tokens = load_pubmed_tokens(split="train")
-    valid_words = load_pubmed_tokens(split="validation")
-    test_words = load_pubmed_tokens(split="test")
-    word_to_id, id_to_word = build_vocabulary(train_tokens, vocab_size=args.vocab_size)
-    valid_ids = encode_tokens(valid_words, word_to_id)
-    test_ids = encode_tokens(test_words, word_to_id)
-    bundle = get_rnn_dataloaders(
-        seq_len=args.seq_len,
-        vocab_size=args.vocab_size,
-        batch_size=args.batch_size,
-    )
+    run_hpylm = not args.rnn_only
+    run_rnn = not args.hpylm_only
 
-    hpylm_rows = evaluate_hpylm_sweep(args, test_ids, valid_ids, test_words, word_to_id, id_to_word)
-    rnn_rows = evaluate_rnn_sweep(args, bundle, test_words, device)
-    rows = hpylm_rows + rnn_rows
+    # Load data once for test-set token sequences and contexts.
+    test_words = load_pubmed_tokens(split="test")
+    rows: List[Dict[str, str]] = []
+
+    if run_hpylm:
+        train_tokens = load_pubmed_tokens(split="train")
+        word_to_id, id_to_word = build_vocabulary(train_tokens, vocab_size=args.vocab_size)
+        test_ids = encode_tokens(test_words, word_to_id)
+        hpylm_rows = evaluate_hpylm_sweep(args, test_ids, test_words, word_to_id, id_to_word)
+        rows.extend(hpylm_rows)
+
+    if run_rnn:
+        bundle = get_rnn_dataloaders(
+            seq_len=args.seq_len,
+            vocab_size=args.vocab_size,
+            batch_size=args.batch_size,
+        )
+        rnn_rows = evaluate_rnn_sweep(args, bundle, test_words, device)
+        rows.extend(rnn_rows)
 
     print("# Evaluation Results")
     if args.quick_sweep:
