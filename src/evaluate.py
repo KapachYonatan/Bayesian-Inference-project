@@ -33,6 +33,7 @@ HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
 RNN_CELL_TYPE_GRID = ["lstm", "gru"]
 RNN_HIDDEN_DIM_GRID = [64, 128]
 RNN_EMBED_DIM_GRID = [64, 128]
+RNN_NUM_LAYERS_GRID = [1, 2]
 
 
 def parse_args() -> argparse.Namespace:
@@ -144,10 +145,10 @@ def selected_hpylm_grid(args: argparse.Namespace) -> Tuple[List[int], List[float
     return HPYLM_ORDER_GRID, HPYLM_DISCOUNT_GRID, HPYLM_CONCENTRATION_GRID
 
 
-def selected_rnn_grid(args: argparse.Namespace) -> Tuple[List[str], List[int], List[int]]:
+def selected_rnn_grid(args: argparse.Namespace) -> Tuple[List[str], List[int], List[int], List[int]]:
     if args.quick_sweep:
-        return ["gru"], [128], [128]
-    return RNN_CELL_TYPE_GRID, RNN_HIDDEN_DIM_GRID, RNN_EMBED_DIM_GRID
+        return ["gru"], [128], [128], [1]
+    return RNN_CELL_TYPE_GRID, RNN_HIDDEN_DIM_GRID, RNN_EMBED_DIM_GRID, RNN_NUM_LAYERS_GRID
 
 
 def set_seed(seed: int) -> None:
@@ -405,19 +406,26 @@ def evaluate_rnn_sweep(
     import torch
 
     rows: List[Dict[str, str]] = []
-    cell_grid, hidden_grid, embed_grid = selected_rnn_grid(args)
-    total_runs = len(cell_grid) * len(hidden_grid) * len(embed_grid)
+    cell_grid, hidden_grid, embed_grid, layers_grid = selected_rnn_grid(args)
+    total_runs = len(cell_grid) * len(hidden_grid) * len(embed_grid) * len(layers_grid)
     print(f"[Eval][RNN] starting sweep with {total_runs} configuration(s)")
-    for cell_type, hidden_dim, embed_dim in itertools.product(cell_grid, hidden_grid, embed_grid):
+    for cell_type, hidden_dim, embed_dim, num_layers in itertools.product(
+        cell_grid,
+        hidden_grid,
+        embed_grid,
+        layers_grid,
+    ):
         print(
             f"[Eval][RNN] creating model cell_type={cell_type}, hidden_dim={hidden_dim}, "
-            f"embed_dim={embed_dim}"
+            f"embed_dim={embed_dim}, num_layers={num_layers}"
         )
         model = NextWordRNN(
             vocab_size=len(bundle.word_to_id),
             embed_dim=embed_dim,
             hidden_dim=hidden_dim,
+            num_layers=num_layers,
             cell_type=cell_type,
+            dropout_prob=0.2,
         )
         completer = NeuralAutocompleter(
             model=model,
@@ -429,7 +437,12 @@ def evaluate_rnn_sweep(
         rnn_save_dir = config_save_dir(
             args.save_dir,
             "rnn",
-            {"cell_type": cell_type, "hidden_dim": hidden_dim, "embed_dim": embed_dim},
+            {
+                "cell_type": cell_type,
+                "hidden_dim": hidden_dim,
+                "embed_dim": embed_dim,
+                "num_layers": num_layers,
+            },
         )
         if rnn_save_dir is not None:
             print(f"[Eval][RNN] checkpoints -> {rnn_save_dir}")
@@ -465,7 +478,10 @@ def evaluate_rnn_sweep(
             test_contexts,
             device=device,
         )
-        params = f"cell_type={cell_type}, hidden_dim={hidden_dim}, embed_dim={embed_dim}"
+        params = (
+            f"cell_type={cell_type}, hidden_dim={hidden_dim}, "
+            f"embed_dim={embed_dim}, num_layers={num_layers}"
+        )
         rows.append(
             {
                 "Model": "RNN",
@@ -478,7 +494,7 @@ def evaluate_rnn_sweep(
         )
         print(
             f"[Eval][RNN] finished config cell_type={cell_type}, hidden_dim={hidden_dim}, "
-            f"embed_dim={embed_dim} -> perplexity={perplexity:.4f}, recall@3={recall3:.4f}, "
+            f"embed_dim={embed_dim}, num_layers={num_layers} -> perplexity={perplexity:.4f}, recall@3={recall3:.4f}, "
             f"recall@5={recall5:.4f}, latency={latency:.4f} ms"
         )
         del model
