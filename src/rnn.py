@@ -124,23 +124,15 @@ class NeuralAutocompleter:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
-
-        if early_stopping_patience > 0 and valid_dataloader is None:
-            raise ValueError("valid_dataloader is required when early_stopping_patience > 0")
-
-        scheduler: Optional[torch.optim.lr_scheduler.ReduceLROnPlateau] = None
-        if use_lr_reducer:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode="min",
-                factor=0.1,
-                patience=2,
-            )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=epochs,
+            eta_min=1e-5,
+        )
 
         start_epoch = 0
         best_val_loss = float("inf")
         best_epoch = 0
-        no_improve_epochs = 0
         best_model_state_dict: Optional[Dict[str, torch.Tensor]] = None
 
         if resume_checkpoint is not None:
@@ -152,7 +144,6 @@ class NeuralAutocompleter:
                 start_epoch = int(checkpoint.get("epoch", 0))
                 best_val_loss = float(checkpoint.get("best_val_loss", best_val_loss))
                 best_epoch = int(checkpoint.get("best_epoch", best_epoch))
-                no_improve_epochs = int(checkpoint.get("no_improve_epochs", no_improve_epochs))
                 saved_best_state = checkpoint.get("best_model_state_dict")
                 if isinstance(saved_best_state, dict):
                     best_model_state_dict = saved_best_state
@@ -210,8 +201,7 @@ class NeuralAutocompleter:
                 f"[RNN] fitting cell_type={self.model.cell_type}, embed_dim={self.model.embed_dim}, "
                 f"hidden_dim={self.model.hidden_dim}, layers={self.model.num_layers}, epochs={epochs}, lr={lr}, "
                 f"dropout_prob={self.model.dropout_prob}, weight_decay=1e-4, "
-                f"lr_reducer={use_lr_reducer}, "
-                f"early_stopping_patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
+                f"scheduler=CosineAnnealingLR(T_max={epochs}, eta_min=1e-5)"
             )
 
         remaining_epochs = max(0, epochs - start_epoch)
@@ -246,10 +236,9 @@ class NeuralAutocompleter:
             val_loss = _evaluate_validation_loss() if valid_dataloader is not None else None
             improved = False
             if val_loss is not None:
-                if val_loss < (best_val_loss - early_stopping_min_delta):
+                if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     best_epoch = current_epoch
-                    no_improve_epochs = 0
                     improved = True
                     best_model_state_dict = {
                         key: value.detach().cpu().clone()
@@ -268,8 +257,6 @@ class NeuralAutocompleter:
                         )
                         if verbose:
                             print(f"[RNN] best checkpoint saved: {best_file}")
-                else:
-                    no_improve_epochs += 1
 
             if save_path is not None:
                 checkpoint_file = save_path / f"rnn_epoch_{current_epoch}.pth"
@@ -282,7 +269,6 @@ class NeuralAutocompleter:
                         "optimizer_state_dict": optimizer.state_dict(),
                         "best_val_loss": best_val_loss,
                         "best_epoch": best_epoch,
-                        "no_improve_epochs": no_improve_epochs,
                         "best_model_state_dict": best_model_state_dict,
                     },
                     latest_file,
@@ -297,26 +283,17 @@ class NeuralAutocompleter:
                     print(
                         f"[RNN] epoch {current_epoch} average train loss: {avg_loss:.4f}, "
                         f"val loss: {val_loss:.4f}, improved={improved}, "
-                        f"no_improve_epochs={no_improve_epochs}"
+                        f"best_val_loss={best_val_loss:.4f}"
                     )
 
-            if scheduler is not None and val_loss is not None:
-                previous_lr = float(optimizer.param_groups[0]["lr"])
-                scheduler.step(val_loss)
-                current_lr = float(optimizer.param_groups[0]["lr"])
-                if verbose and current_lr != previous_lr:
-                    print(
-                        f"[RNN] lr reduced at epoch {current_epoch}: "
-                        f"{previous_lr:.2e} -> {current_lr:.2e}"
-                    )
-
-            if early_stopping_patience > 0 and no_improve_epochs >= early_stopping_patience:
-                if verbose:
-                    print(
-                        f"[RNN] early stopping triggered at epoch {current_epoch}; "
-                        f"best epoch={best_epoch}, best val loss={best_val_loss:.4f}"
-                    )
-                break
+            previous_lr = float(optimizer.param_groups[0]["lr"])
+            scheduler.step()
+            current_lr = float(optimizer.param_groups[0]["lr"])
+            if verbose and current_lr != previous_lr:
+                print(
+                    f"[RNN] cosine lr update at epoch {current_epoch}: "
+                    f"{previous_lr:.2e} -> {current_lr:.2e}"
+                )
 
         if restore_best_weights and best_model_state_dict is not None:
             self.model.load_state_dict(best_model_state_dict)

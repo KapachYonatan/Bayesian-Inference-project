@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate HPYLM and RNN on perplexity and latency.")
     parser.add_argument("--min-freq", type=int, default=3)
     parser.add_argument("--seq-len", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--rnn-epochs", type=int, default=3)
     parser.add_argument(
         "--rnn-dropout-prob",

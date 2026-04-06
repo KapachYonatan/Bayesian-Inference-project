@@ -179,7 +179,7 @@ def get_rnn_dataloaders(
     seq_len: int,
     min_freq: int = 3,
     stride: int = 5,
-    batch_size: int = 64,
+    batch_size: int = 128,
     num_workers: int = 0,
 ) -> RnnDataBundle:
     """
