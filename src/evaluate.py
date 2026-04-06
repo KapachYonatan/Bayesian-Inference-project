@@ -30,9 +30,9 @@ from src.rnn import NeuralAutocompleter, NextWordRNN
 HPYLM_ORDER_GRID = [3, 4, 7]
 HPYLM_DISCOUNT_GRID = [0.5, 0.75]
 HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
-RNN_CELL_TYPE_GRID = ["lstm"]
+RNN_CELL_TYPE_GRID = ["rnn"]
 RNN_DIM_GRID = [16, 32, 64]
-RNN_NUM_LAYERS_GRID = [1]
+RNN_NUM_LAYERS_GRID = [1, 2]
 
 
 def parse_args() -> argparse.Namespace:
