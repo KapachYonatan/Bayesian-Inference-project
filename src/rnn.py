@@ -119,6 +119,7 @@ class NeuralAutocompleter:
         early_stopping_patience: int = 0,
         early_stopping_min_delta: float = 0.0,
         restore_best_weights: bool = True,
+        use_lr_reducer: bool = True,
     ) -> List[float]:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
@@ -127,12 +128,14 @@ class NeuralAutocompleter:
         if early_stopping_patience > 0 and valid_dataloader is None:
             raise ValueError("valid_dataloader is required when early_stopping_patience > 0")
 
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=0.1,
-            patience=2,
-        )
+        scheduler: Optional[torch.optim.lr_scheduler.ReduceLROnPlateau] = None
+        if use_lr_reducer:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=0.1,
+                patience=2,
+            )
 
         start_epoch = 0
         best_val_loss = float("inf")
@@ -206,8 +209,8 @@ class NeuralAutocompleter:
             print(
                 f"[RNN] fitting cell_type={self.model.cell_type}, embed_dim={self.model.embed_dim}, "
                 f"hidden_dim={self.model.hidden_dim}, layers={self.model.num_layers}, epochs={epochs}, lr={lr}, "
-                f"dropout_prob={self.model.dropout_prob}, weight_decay=1e-5, "
-                f"scheduler=ReduceLROnPlateau(factor=0.1, patience=2), "
+                f"dropout_prob={self.model.dropout_prob}, weight_decay=1e-4, "
+                f"lr_reducer={use_lr_reducer}, "
                 f"early_stopping_patience={early_stopping_patience}, min_delta={early_stopping_min_delta}"
             )
 
@@ -297,7 +300,7 @@ class NeuralAutocompleter:
                         f"no_improve_epochs={no_improve_epochs}"
                     )
 
-            if val_loss is not None:
+            if scheduler is not None and val_loss is not None:
                 previous_lr = float(optimizer.param_groups[0]["lr"])
                 scheduler.step(val_loss)
                 current_lr = float(optimizer.param_groups[0]["lr"])

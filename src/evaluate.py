@@ -32,7 +32,7 @@ HPYLM_DISCOUNT_GRID = [0.5, 0.75]
 HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
 RNN_CELL_TYPE_GRID = ["gru"]
 RNN_DIM_GRID = [16, 32, 64]
-RNN_NUM_LAYERS_GRID = [2]
+RNN_NUM_LAYERS_GRID = [1]
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seq-len", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--rnn-epochs", type=int, default=3)
+    parser.add_argument(
+        "--rnn-dropout-prob",
+        type=float,
+        default=0.2,
+        help="Dropout probability for RNN embedding/recurrent layers.",
+    )
     parser.add_argument("--latency-samples", type=int, default=100)
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument(
@@ -93,6 +99,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not restore best validation-loss weights at the end of RNN training.",
     )
+    parser.add_argument(
+        "--use-lr-reducer",
+        dest="use_lr_reducer",
+        action="store_true",
+        help="Enable ReduceLROnPlateau during RNN training.",
+    )
+    parser.set_defaults(use_lr_reducer=False)
     return parser.parse_args()
 
 
@@ -425,7 +438,7 @@ def evaluate_rnn_sweep(
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             cell_type=cell_type,
-            dropout_prob=0.2,
+            dropout_prob=args.rnn_dropout_prob,
         )
         completer = NeuralAutocompleter(
             model=model,
@@ -442,6 +455,8 @@ def evaluate_rnn_sweep(
                 "hidden_dim": hidden_dim,
                 "embed_dim": embed_dim,
                 "num_layers": num_layers,
+                "dropout": args.rnn_dropout_prob,
+                "lr_reducer": args.use_lr_reducer,
             },
         )
         if rnn_save_dir is not None:
@@ -462,6 +477,7 @@ def evaluate_rnn_sweep(
             early_stopping_patience=args.early_stopping_patience,
             early_stopping_min_delta=args.early_stopping_min_delta,
             restore_best_weights=not args.no_restore_best,
+            use_lr_reducer=args.use_lr_reducer,
         )
         perplexity = calculate_rnn_perplexity(completer, bundle.test_loader)
         recall3, recall5 = calculate_rnn_topk_accuracy(completer, bundle.test_loader)
@@ -480,7 +496,8 @@ def evaluate_rnn_sweep(
         )
         params = (
             f"cell_type={cell_type}, hidden_dim={hidden_dim}, "
-            f"embed_dim={embed_dim}, num_layers={num_layers}"
+            f"embed_dim={embed_dim}, num_layers={num_layers}, "
+            f"dropout={args.rnn_dropout_prob}, lr_reducer={args.use_lr_reducer}"
         )
         rows.append(
             {
