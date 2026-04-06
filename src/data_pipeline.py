@@ -134,21 +134,32 @@ def get_hpylm_data(min_freq: int = 3) -> Tuple[List[int], Dict[str, int], Dict[i
 class NextWordDataset(Dataset[Tuple[torch.Tensor, torch.Tensor]]):
     """Dataset yielding (input_sequence, next_word_target) pairs."""
 
-    def __init__(self, token_ids: Sequence[int], seq_len: int) -> None:
+    def __init__(self, token_ids: Sequence[int], seq_len: int, stride: int = 1) -> None:
         if seq_len < 1:
             raise ValueError("seq_len must be >= 1")
+        if stride < 1:
+            raise ValueError("stride must be >= 1")
         if len(token_ids) <= seq_len:
             raise ValueError("token_ids must contain more elements than seq_len")
 
-        self.token_ids = list(token_ids)
+        self.sequences: List[List[int]] = []
+        self.targets: List[int] = []
         self.seq_len = seq_len
+        self.stride = stride
+
+        for i in range(0, len(token_ids) - seq_len, stride):
+            self.sequences.append(list(token_ids[i : i + seq_len]))
+            self.targets.append(token_ids[i + seq_len])
+
+        if not self.sequences:
+            raise ValueError("No training windows produced. Reduce seq_len or stride.")
 
     def __len__(self) -> int:
-        return len(self.token_ids) - self.seq_len
+        return len(self.sequences)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        input_seq = self.token_ids[idx : idx + self.seq_len]
-        target = self.token_ids[idx + self.seq_len]
+        input_seq = self.sequences[idx]
+        target = self.targets[idx]
         return (
             torch.tensor(input_seq, dtype=torch.long),
             torch.tensor(target, dtype=torch.long),
@@ -167,6 +178,7 @@ class RnnDataBundle:
 def get_rnn_dataloaders(
     seq_len: int,
     min_freq: int = 3,
+    stride: int = 5,
     batch_size: int = 64,
     num_workers: int = 0,
 ) -> RnnDataBundle:
@@ -187,9 +199,9 @@ def get_rnn_dataloaders(
     valid_ids = encode_tokens(valid_tokens, word_to_id)
     test_ids = encode_tokens(test_tokens, word_to_id)
 
-    train_dataset = NextWordDataset(train_ids, seq_len=seq_len)
-    valid_dataset = NextWordDataset(valid_ids, seq_len=seq_len)
-    test_dataset = NextWordDataset(test_ids, seq_len=seq_len)
+    train_dataset = NextWordDataset(train_ids, seq_len=seq_len, stride=stride)
+    valid_dataset = NextWordDataset(valid_ids, seq_len=seq_len, stride=stride)
+    test_dataset = NextWordDataset(test_ids, seq_len=seq_len, stride=stride)
 
     train_loader = DataLoader(
         train_dataset,

@@ -31,7 +31,7 @@ HPYLM_ORDER_GRID = [3, 10]
 HPYLM_DISCOUNT_GRID = [0.5, 0.75]
 HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
 RNN_CELL_TYPE_GRID = ["gru"]
-RNN_DIM_GRID = [128, 256]
+RNN_DIM_GRID = [64, 128]
 RNN_NUM_LAYERS_GRID = [1]
 
 
@@ -546,6 +546,7 @@ def main() -> None:
         bundle = get_rnn_dataloaders(
             seq_len=args.seq_len,
             min_freq=args.min_freq,
+            stride=3,
             batch_size=args.batch_size,
         )
         rnn_rows = evaluate_rnn_sweep(args, bundle, test_words, device)
