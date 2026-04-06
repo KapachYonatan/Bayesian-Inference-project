@@ -346,6 +346,7 @@ class NeuralAutocompleter:
         self.model.eval()
         with torch.no_grad():
             logits, _ = self.model(x)
+            logits[..., unk_id] = -float("inf")
             probs = torch.softmax(logits, dim=-1)
             top_ids = torch.topk(probs, k=max(top_k, 1), dim=-1).indices[0].tolist()
 
@@ -354,7 +355,7 @@ class NeuralAutocompleter:
 
 def build_rnn_training_bundle(
     seq_len: int = 20,
-    vocab_size: int = 10_000,
+    min_freq: int = 3,
     batch_size: int = 64,
     embed_dim: int = 128,
     hidden_dim: int = 256,
@@ -364,7 +365,7 @@ def build_rnn_training_bundle(
     """Create model + dataloaders + trainer wrapper for next-word experiments."""
     dataloaders = get_rnn_dataloaders(
         seq_len=seq_len,
-        vocab_size=vocab_size,
+        min_freq=min_freq,
         batch_size=batch_size,
     )
     model = NextWordRNN(

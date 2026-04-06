@@ -365,22 +365,23 @@ class HPYLM:
         ]
 
         scored = observed_candidates + unseen_candidates
+        scored = [pair for pair in scored if pair[1] != unk_id]
         scored.sort(key=lambda pair: pair[0], reverse=True)
         top_ids = [token_id for _, token_id in scored[: max(top_k, 1)]]
         return [id_to_word.get(token_id, UNK_TOKEN) for token_id in top_ids]
 
 def train_hpylm(
     order: int = 3,
-    vocab_size: int = 10_000,
+    min_freq: int = 3,
     discount: float = 0.75,
     concentration: float = 1.0,
     num_gibbs_iterations: int = 30,
 ) -> Tuple[HPYLM, Dict[str, int], Dict[int, str]]:
     """Load corpus IDs, fit HPYLM, and return model with vocabulary mappings."""
-    corpus_ids, word_to_id, id_to_word = get_hpylm_data(vocab_size=vocab_size)
+    corpus_ids, word_to_id, id_to_word = get_hpylm_data(min_freq=min_freq)
     model = HPYLM(
         order=order,
-        vocab_size=vocab_size,
+        vocab_size=len(word_to_id),
         discount=discount,
         concentration=concentration,
     )

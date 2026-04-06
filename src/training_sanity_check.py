@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train HPYLM and RNN on real data and check if metrics look reasonable."
     )
-    parser.add_argument("--vocab-size", type=int, default=10_000)
+    parser.add_argument("--min-freq", type=int, default=3)
     parser.add_argument("--seq-len", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=13)
@@ -144,7 +144,7 @@ def _train_and_eval_hpylm(
     else:
         model = HPYLM(
             order=args.hpylm_order,
-            vocab_size=args.vocab_size,
+            vocab_size=len(word_to_id),
             discount=args.hpylm_discount,
             concentration=args.hpylm_concentration,
         )
@@ -178,7 +178,7 @@ def _train_and_eval_hpylm(
         recall3=recall3,
         recall5=recall5,
         latency_ms=latency,
-        vocab_size=args.vocab_size,
+        vocab_size=len(word_to_id),
         max_perplexity=args.max_perplexity,
         min_recall3=args.min_recall3,
         min_recall5=args.min_recall5,
@@ -265,7 +265,7 @@ def _train_and_eval_rnn(
         recall3=recall3,
         recall5=recall5,
         latency_ms=latency,
-        vocab_size=args.vocab_size,
+        vocab_size=len(bundle.word_to_id),
         max_perplexity=args.max_perplexity,
         min_recall3=args.min_recall3,
         min_recall5=args.min_recall5,
@@ -298,13 +298,13 @@ def main() -> None:
     train_words = load_pubmed_tokens(split="train")
     test_words = load_pubmed_tokens(split="test")
 
-    word_to_id, id_to_word = build_vocabulary(train_words, vocab_size=args.vocab_size)
+    word_to_id, id_to_word = build_vocabulary(train_words, min_freq=args.min_freq)
     train_ids = encode_tokens(train_words, word_to_id)
     test_ids = encode_tokens(test_words, word_to_id)
 
     bundle = get_rnn_dataloaders(
         seq_len=args.seq_len,
-        vocab_size=args.vocab_size,
+        min_freq=args.min_freq,
         batch_size=args.batch_size,
     )
 

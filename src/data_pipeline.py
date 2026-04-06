@@ -84,23 +84,25 @@ def _extract_text(item: Dict[str, object]) -> str:
 
 def build_vocabulary(
     tokens: Sequence[str],
-    vocab_size: int = 10_000,
+    min_freq: int = 3,
     unk_token: str = UNK_TOKEN,
 ) -> Tuple[Dict[str, int], Dict[int, str]]:
     """
-    Build top-k vocabulary mappings.
+    Build vocabulary mappings using a minimum frequency cutoff.
 
     Index 0 is always reserved for unk_token.
     """
-    if vocab_size < 1:
-        raise ValueError("vocab_size must be >= 1")
+    if min_freq < 1:
+        raise ValueError("min_freq must be >= 1")
 
     counter = Counter(tokens)
-    most_common = counter.most_common(max(vocab_size - 1, 0))
 
     word_to_id: Dict[str, int] = {unk_token: 0}
-    for idx, (word, _) in enumerate(most_common, start=1):
-        word_to_id[word] = idx
+    next_id = 1
+    for word, count in counter.items():
+        if count >= min_freq:
+            word_to_id[word] = next_id
+            next_id += 1
 
     id_to_word: Dict[int, str] = {idx: word for word, idx in word_to_id.items()}
     return word_to_id, id_to_word
@@ -116,15 +118,15 @@ def encode_tokens(
     return [word_to_id.get(token, unk_id) for token in tokens]
 
 
-def get_hpylm_data(vocab_size: int = 10_000) -> Tuple[List[int], Dict[str, int], Dict[int, str]]:
+def get_hpylm_data(min_freq: int = 3) -> Tuple[List[int], Dict[str, int], Dict[int, str]]:
     """
     Return PubMed train corpus as integer IDs for HPYLM.
 
-    Vocabulary is built on the train split using top vocab_size words,
+    Vocabulary is built on the train split using a minimum frequency cutoff,
     and all out-of-vocabulary words are mapped to <UNK>.
     """
     train_tokens = load_pubmed_tokens(split="train")
-    word_to_id, id_to_word = build_vocabulary(train_tokens, vocab_size=vocab_size)
+    word_to_id, id_to_word = build_vocabulary(train_tokens, min_freq=min_freq)
     corpus_ids = encode_tokens(train_tokens, word_to_id)
     return corpus_ids, word_to_id, id_to_word
 
@@ -164,7 +166,7 @@ class RnnDataBundle:
 
 def get_rnn_dataloaders(
     seq_len: int,
-    vocab_size: int = 10_000,
+    min_freq: int = 3,
     batch_size: int = 64,
     num_workers: int = 0,
 ) -> RnnDataBundle:
@@ -179,7 +181,7 @@ def get_rnn_dataloaders(
     valid_tokens = load_pubmed_tokens(split="validation")
     test_tokens = load_pubmed_tokens(split="test")
 
-    word_to_id, id_to_word = build_vocabulary(train_tokens, vocab_size=vocab_size)
+    word_to_id, id_to_word = build_vocabulary(train_tokens, min_freq=min_freq)
 
     train_ids = encode_tokens(train_tokens, word_to_id)
     valid_ids = encode_tokens(valid_tokens, word_to_id)

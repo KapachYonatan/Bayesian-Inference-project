@@ -37,7 +37,7 @@ RNN_NUM_LAYERS_GRID = [1]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate HPYLM and RNN on perplexity and latency.")
-    parser.add_argument("--vocab-size", type=int, default=10_000)
+    parser.add_argument("--min-freq", type=int, default=3)
     parser.add_argument("--seq-len", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--rnn-epochs", type=int, default=3)
@@ -335,7 +335,7 @@ def evaluate_hpylm_sweep(
     word_to_id: Dict[str, int],
     id_to_word: Dict[int, str],
 ) -> List[Dict[str, str]]:
-    corpus_ids, _, _ = get_hpylm_data(vocab_size=args.vocab_size)
+    corpus_ids, _, _ = get_hpylm_data(min_freq=args.min_freq)
     trained_corpus = corpus_ids
     order_grid, discount_grid, concentration_grid = selected_hpylm_grid(args)
     contexts = random_contexts_from_tokens(
@@ -372,7 +372,7 @@ def evaluate_hpylm_sweep(
         else:
             model = HPYLM(
                 order=order,
-                vocab_size=args.vocab_size,
+                vocab_size=len(word_to_id),
                 discount=discount,
                 concentration=concentration,
             )
@@ -537,7 +537,7 @@ def main() -> None:
 
     if run_hpylm:
         train_tokens = load_pubmed_tokens(split="train")
-        word_to_id, id_to_word = build_vocabulary(train_tokens, vocab_size=args.vocab_size)
+        word_to_id, id_to_word = build_vocabulary(train_tokens, min_freq=args.min_freq)
         test_ids = encode_tokens(test_words, word_to_id)
         hpylm_rows = evaluate_hpylm_sweep(args, test_ids, test_words, word_to_id, id_to_word)
         rows.extend(hpylm_rows)
@@ -545,7 +545,7 @@ def main() -> None:
     if run_rnn:
         bundle = get_rnn_dataloaders(
             seq_len=args.seq_len,
-            vocab_size=args.vocab_size,
+            min_freq=args.min_freq,
             batch_size=args.batch_size,
         )
         rnn_rows = evaluate_rnn_sweep(args, bundle, test_words, device)
