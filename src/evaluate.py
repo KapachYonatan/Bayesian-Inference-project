@@ -27,11 +27,11 @@ from src.hpylm import HPYLM
 from src.rnn import NeuralAutocompleter, NextWordRNN
 
 
-HPYLM_ORDER_GRID = [3, 4, 7]
+HPYLM_ORDER_GRID = [3, 10]
 HPYLM_DISCOUNT_GRID = [0.5, 0.75]
 HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
 RNN_CELL_TYPE_GRID = ["gru"]
-RNN_DIM_GRID = [32, 64]
+RNN_DIM_GRID = [128, 256]
 RNN_NUM_LAYERS_GRID = [1]
 
 

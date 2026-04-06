@@ -312,22 +312,27 @@ class HPYLM:
             checkpoint_file = save_path / "hpylm_checkpoint.pkl"
 
         # Gibbs resampling over all token positions.
+        gibbs_log_step = max(1, num_gibbs_iterations // 10)
         for iteration in range(num_gibbs_iterations):
             iter_start = time.perf_counter()
-            if verbose:
-                print(f"[HPYLM] gibbs iteration {iteration + 1}/{num_gibbs_iterations}")
             for idx, dish in enumerate(tokenized_corpus):
                 restaurant = restaurants[idx]
                 restaurant.remove_customer(dish)
                 restaurant.add_customer(dish, self.discount, self.concentration)
-                if verbose and (((idx + 1) % progress_step == 0) or (idx + 1 == total_tokens)):
-                    elapsed = time.perf_counter() - iter_start
-                    print(
-                        f"[HPYLM] iter {iteration + 1} progress {idx + 1}/{total_tokens} "
-                        f"({100.0 * (idx + 1) / max(total_tokens, 1):.1f}%), elapsed={elapsed:.1f}s"
-                    )
 
-            if checkpoint_file is not None:
+            if verbose and (
+                ((iteration + 1) % gibbs_log_step == 0) or (iteration + 1 == num_gibbs_iterations)
+            ):
+                elapsed = time.perf_counter() - iter_start
+                print(
+                    f"[HPYLM] gibbs iteration {iteration + 1}/{num_gibbs_iterations} "
+                    f"complete, elapsed={elapsed:.1f}s"
+                )
+
+            should_checkpoint = (
+                ((iteration + 1) % gibbs_log_step == 0) or (iteration + 1 == num_gibbs_iterations)
+            )
+            if checkpoint_file is not None and should_checkpoint:
                 with checkpoint_file.open("wb") as fp:
                     pickle.dump(self, fp)
                 if verbose:
