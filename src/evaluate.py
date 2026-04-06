@@ -30,10 +30,9 @@ from src.rnn import NeuralAutocompleter, NextWordRNN
 HPYLM_ORDER_GRID = [3, 4, 7]
 HPYLM_DISCOUNT_GRID = [0.5, 0.75]
 HPYLM_CONCENTRATION_GRID = [1.0, 5.0]
-RNN_CELL_TYPE_GRID = ["gru"]
-RNN_HIDDEN_DIM_GRID = [64, 128]
-RNN_EMBED_DIM_GRID = [64, 128]
-RNN_NUM_LAYERS_GRID = [1, 2]
+RNN_CELL_TYPE_GRID = ["lstm"]
+RNN_DIM_GRID = [64, 128, 256]
+RNN_NUM_LAYERS_GRID = [1]
 
 
 def parse_args() -> argparse.Namespace:
@@ -145,10 +144,10 @@ def selected_hpylm_grid(args: argparse.Namespace) -> Tuple[List[int], List[float
     return HPYLM_ORDER_GRID, HPYLM_DISCOUNT_GRID, HPYLM_CONCENTRATION_GRID
 
 
-def selected_rnn_grid(args: argparse.Namespace) -> Tuple[List[str], List[int], List[int], List[int]]:
+def selected_rnn_grid(args: argparse.Namespace) -> Tuple[List[str], List[int], List[int]]:
     if args.quick_sweep:
-        return ["gru"], [128], [128], [1]
-    return RNN_CELL_TYPE_GRID, RNN_HIDDEN_DIM_GRID, RNN_EMBED_DIM_GRID, RNN_NUM_LAYERS_GRID
+        return ["gru"], [128], [1]
+    return RNN_CELL_TYPE_GRID, RNN_DIM_GRID, RNN_NUM_LAYERS_GRID
 
 
 def set_seed(seed: int) -> None:
@@ -406,15 +405,16 @@ def evaluate_rnn_sweep(
     import torch
 
     rows: List[Dict[str, str]] = []
-    cell_grid, hidden_grid, embed_grid, layers_grid = selected_rnn_grid(args)
-    total_runs = len(cell_grid) * len(hidden_grid) * len(embed_grid) * len(layers_grid)
+    cell_grid, dim_grid, layers_grid = selected_rnn_grid(args)
+    total_runs = len(cell_grid) * len(dim_grid) * len(layers_grid)
     print(f"[Eval][RNN] starting sweep with {total_runs} configuration(s)")
-    for cell_type, hidden_dim, embed_dim, num_layers in itertools.product(
+    for cell_type, dim, num_layers in itertools.product(
         cell_grid,
-        hidden_grid,
-        embed_grid,
+        dim_grid,
         layers_grid,
     ):
+        hidden_dim = dim
+        embed_dim = dim
         print(
             f"[Eval][RNN] creating model cell_type={cell_type}, hidden_dim={hidden_dim}, "
             f"embed_dim={embed_dim}, num_layers={num_layers}"

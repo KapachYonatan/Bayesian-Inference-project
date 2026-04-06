@@ -34,6 +34,9 @@ class NextWordRNN(nn.Module):
         self.cell_type = cell_type.lower()
         self.dropout_prob = dropout_prob
 
+        if embed_dim != hidden_dim:
+            raise ValueError("embed_dim must equal hidden_dim when using weight tying")
+
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.dropout = nn.Dropout(p=dropout_prob)
 
@@ -65,6 +68,7 @@ class NextWordRNN(nn.Module):
             raise ValueError("cell_type must be one of: 'rnn', 'gru', 'lstm'")
 
         self.output = nn.Linear(hidden_dim, vocab_size)
+        self.output.weight = self.embedding.weight
 
     def forward(
         self,
@@ -118,7 +122,7 @@ class NeuralAutocompleter:
     ) -> List[float]:
         """Train with cross-entropy and Adam; return average loss per epoch."""
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-5)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
 
         if early_stopping_patience > 0 and valid_dataloader is None:
             raise ValueError("valid_dataloader is required when early_stopping_patience > 0")
